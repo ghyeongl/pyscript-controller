@@ -2,8 +2,8 @@
 import asyncio
 import os
 import logging
-from src.process_manager import ProcessManager
-from src.discord_bot import DiscordBot
+from src.infra.process_manager import ProcessManager
+from cli.discord_bot import DiscordBot
 
 # Logger 설정
 logging.basicConfig(level=logging.INFO)
