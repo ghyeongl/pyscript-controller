@@ -1,0 +1,9 @@
+name: pyscript
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip
+  - pip:
+    - discord.py==2.5.0
