@@ -3,7 +3,7 @@
 class Repository:
     def __init__(self, name, state="stopped"):
         self.name = name
-        self.state = state  # e.g. "running", "stopped", "error"
+        self.state = state  # "stopped", "running", etc.
 
     def start(self):
         if self.state == "running":
@@ -16,10 +16,4 @@ class Repository:
         self.state = "stopped"
 
     def get_status(self):
-        """현재 저장된 state를 반환."""
         return self.state
-
-    def can_start(self):
-        return self.state in ("stopped", "error")
-
-    # etc...

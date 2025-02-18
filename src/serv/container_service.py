@@ -16,9 +16,10 @@ class ContainerService:
         """
         containers = self.list_containers()
         if cont_name not in containers:
-            raise ValueError(f"Container '{cont_name}' does not exist. (from docker ps -a)")
+            raise ValueError(f"Container '{cont_name}' does not exist.")
         
         subprocess.run(["docker", "start", cont_name], check=True)
+        return f"Container '{cont_name}' started."
 
     def stop_container(self, cont_name):
         """
@@ -26,6 +27,15 @@ class ContainerService:
         """
         containers = self.list_containers()
         if cont_name not in containers:
-            raise ValueError(f"Container '{cont_name}' does not exist. (from docker ps -a)")
+            raise ValueError(f"Container '{cont_name}' does not exist.")
 
         subprocess.run(["docker", "stop", cont_name], check=True)
+        return f"Container '{cont_name}' stopped."
+
+    def restart_container(self, cont_name):
+        """
+        docker restart <container_name> 실행
+        """
+        self.stop_container(cont_name)
+        self.start_container(cont_name)
+        return f"Container '{cont_name}' restarted."

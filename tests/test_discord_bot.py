@@ -166,9 +166,7 @@ async def test_repo_status(bot, message, scriptService_mock):
 
     # then
     scriptService_mock.status_repo.assert_called_once_with("myrepo")
-    message.channel.send.assert_called_once()
-    sent_args, _ = message.channel.send.call_args
-    assert "Repo 'myrepo' is running." in sent_args[0]
+    message.channel.send.assert_called_once_with("Repo 'myrepo' is running.")
 
 @pytest.mark.asyncio
 async def test_repo_status_nonexistent(bot, message, scriptService_mock):
@@ -176,14 +174,12 @@ async def test_repo_status_nonexistent(bot, message, scriptService_mock):
     없는 레포 조회 시 -> ValueError -> Discord에 에러 메시지 전송
     """
     message.content = '$repo --name "foo" status'
-    scriptService_mock.status_repo.side_effect = ValueError("Repo 'foo' not found.")
+    scriptService_mock.status_repo.side_effect = ValueError("Repo 'foo' does not exist.")
 
     await bot.client.on_message(message)
 
     scriptService_mock.status_repo.assert_called_once_with("foo")
-    message.channel.send.assert_called_once()
-    sent_args, _ = message.channel.send.call_args
-    assert "Repo 'foo' not found." in sent_args[0]
+    message.channel.send.assert_called_once_with("Repo 'foo' does not exist.")
 
 
 # -----------------------------------------------------------------------------

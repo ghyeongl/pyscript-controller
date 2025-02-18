@@ -7,13 +7,10 @@
 """
 
 def log(message: str):
-    # 간단히 stdout에 찍거나, 소켓을 통해 컨트롤러로 보냄
     print(f"[REPO-LOG] {message}")
 
 def warn(message: str):
     print(f"[REPO-WARN] {message}")
 
 def send_event(event_type: str, data: dict):
-    # 이벤트를 컨트롤러에 전송한다고 가정
-    # IPC나 네트워크 경로를 통해 전달될 수 있음
     print(f"[REPO-EVENT] type={event_type}, data={data}")

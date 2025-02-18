@@ -3,9 +3,408 @@ platform darwin -- Python 3.9.21, pytest-8.3.4, pluggy-1.5.0
 rootdir: /Users/ghyeong/Spaces/Work/Devs/Lang-Python/pyscript-controller
 plugins: asyncio-0.25.3
 asyncio: mode=strict, asyncio_default_fixture_loop_scope=None
-collected 36 items
+collected 60 items
 
-tests/test_discord_bot.py .................................              [ 91%]
-tests/test_script_service.py ...                                         [100%]
+tests/test_container_service.py ....                                     [  6%]
+tests/test_discord_bot.py .......................F.........              [ 61%]
+tests/test_discord_bot_git.py ....                                       [ 68%]
+tests/test_git_commands.py F...                                          [ 75%]
+tests/test_script_service.py .FFFFFFFF...FFF                             [100%]
 
-============================== 36 passed in 0.15s ==============================
+=================================== FAILURES ===================================
+_____________________________ test_git_fetch_repo ______________________________
+
+bot = <src.cli.discord_bot.DiscordBot object at 0x1052c5280>
+message = <MagicMock id='4381487168'>
+scriptService_mock = <MagicMock id='4381759424'>
+
+    @pytest.mark.asyncio
+    async def test_git_fetch_repo(bot, message, scriptService_mock):
+        """
+        '$git fetch --repo myrepo'
+        """
+        message.content = "$git fetch --repo myrepo"
+        await bot.client.on_message(message)
+    
+        scriptService_mock.git_fetch_repo.assert_called_once_with("myrepo")
+        message.channel.send.assert_called_once()
+        sent_args, _ = message.channel.send.call_args
+>       assert "Fetched repo myrepo." in sent_args[0]
+E       AssertionError: assert 'Fetched repo myrepo.' in <MagicMock name='mock.git_fetch_repo()' id='4381764576'>
+
+tests/test_discord_bot.py:389: AssertionError
+_____________________________ test_git_fetch_repo ______________________________
+
+mock_run = <MagicMock name='run' id='4381293680'>
+script_service = <src.serv.script_service.ScriptService object at 0x1052667c0>
+
+    @patch("subprocess.run")
+    def test_git_fetch_repo(mock_run, script_service):
+        with patch("os.path.isdir", return_value=True):
+            mock_run.return_value = MagicMock(returncode=0, stdout="fetch success", stderr="")
+    
+>           script_service.git_fetch_repo("repo1")
+
+tests/test_git_commands.py:14: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/serv/script_service.py:105: in git_fetch_repo
+    self._get_repo(repo_name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.serv.script_service.ScriptService object at 0x1052667c0>
+repo_name = 'repo1'
+
+    def _get_repo(self, repo_name):
+        if repo_name not in self.repos:
+            logger.error(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+>           raise ValueError(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+E           ValueError: Repo 'repo1' does not exist in executive-repository.
+
+src/serv/script_service.py:41: ValueError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'repo1' does not exist in executive-repository.
+_________________________ test_git_fetch_repo_success __________________________
+
+mock_isdir = <MagicMock name='isdir' id='4382145600'>
+mock_run = <MagicMock name='run' id='4382508512'>
+script_service = <src.serv.script_service.ScriptService object at 0x1053230d0>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x105323e80>
+
+    @patch("subprocess.run")
+    @patch("os.path.isdir", return_value=True)
+    def test_git_fetch_repo_success(mock_isdir, mock_run, script_service, caplog):
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="fetch success")
+    
+        with caplog.at_level(logging.INFO):
+>           result_msg = script_service.git_fetch_repo("repo1")
+
+tests/test_script_service.py:41: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/serv/script_service.py:105: in git_fetch_repo
+    self._get_repo(repo_name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.serv.script_service.ScriptService object at 0x1053230d0>
+repo_name = 'repo1'
+
+    def _get_repo(self, repo_name):
+        if repo_name not in self.repos:
+            logger.error(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+>           raise ValueError(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+E           ValueError: Repo 'repo1' does not exist in executive-repository.
+
+src/serv/script_service.py:41: ValueError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'repo1' does not exist in executive-repository.
+___________________________ test_git_fetch_repo_fail ___________________________
+
+mock_isdir = <MagicMock name='isdir' id='4382197216'>
+mock_run = <MagicMock name='run' id='4381975792'>
+script_service = <src.serv.script_service.ScriptService object at 0x105330610>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x105330790>
+
+    @patch("subprocess.run")
+    @patch("os.path.isdir", return_value=True)
+    def test_git_fetch_repo_fail(mock_isdir, mock_run, script_service, caplog):
+        mock_run.return_value = MagicMock(returncode=1, stderr="some git error", stdout="")
+    
+        with caplog.at_level(logging.INFO):
+            with pytest.raises(RuntimeError) as excinfo:
+>               script_service.git_fetch_repo("repo1")
+
+tests/test_script_service.py:65: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/serv/script_service.py:105: in git_fetch_repo
+    self._get_repo(repo_name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.serv.script_service.ScriptService object at 0x105330610>
+repo_name = 'repo1'
+
+    def _get_repo(self, repo_name):
+        if repo_name not in self.repos:
+            logger.error(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+>           raise ValueError(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+E           ValueError: Repo 'repo1' does not exist in executive-repository.
+
+src/serv/script_service.py:41: ValueError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'repo1' does not exist in executive-repository.
+_______________________ test_git_fetch_repo_no_such_dir ________________________
+
+mock_isdir = <MagicMock name='isdir' id='4380713600'>
+mock_run = <MagicMock name='run' id='4382307616'>
+script_service = <src.serv.script_service.ScriptService object at 0x1051c6b50>
+caplog = <_pytest.logging.LogCaptureFixture object at 0x1051c6070>
+
+    @patch("subprocess.run")
+    @patch("os.path.isdir", return_value=False)
+    def test_git_fetch_repo_no_such_dir(mock_isdir, mock_run, script_service, caplog):
+        with caplog.at_level(logging.INFO):
+            with pytest.raises(ValueError) as excinfo:
+                script_service.git_fetch_repo("unknown")
+>           assert "Repo 'unknown' not found" in str(excinfo.value)
+E           assert "Repo 'unknown' not found" in "Repo 'unknown' does not exist in executive-repository."
+E            +  where "Repo 'unknown' does not exist in executive-repository." = str(ValueError("Repo 'unknown' does not exist in executive-repository."))
+E            +    where ValueError("Repo 'unknown' does not exist in executive-repository.") = <ExceptionInfo ValueError("Repo 'unknown' does not exist in executive-repository.") tblen=3>.value
+
+tests/test_script_service.py:75: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'unknown' does not exist in executive-repository.
+____________________________ test_list_local_repos _____________________________
+
+mock_isdir = <MagicMock name='isdir' id='4380999584'>
+mock_listdir = <MagicMock name='listdir' id='4380691472'>
+script_service = <src.serv.script_service.ScriptService object at 0x10520b6d0>
+
+    @patch("os.listdir")
+    @patch("os.path.isdir")
+    def test_list_local_repos(mock_isdir, mock_listdir, script_service):
+        """
+        - executive-repository 폴더 내부에 'repoA', 'test-repo' 폴더가 있다고 가정
+        - repoA/.git 은 있음
+        - test-repo/.git 은 없음
+        """
+        def isdir_side_effect(path):
+            if path == "executive-repository":
+                return True
+            if path == "executive-repository/repoA":
+                return True
+            if path == "executive-repository/test-repo":
+                return True
+            if path == "executive-repository/repoA/.git":
+                return True
+            if path == "executive-repository/test-repo/.git":
+                return False
+            return False
+    
+        mock_isdir.side_effect = isdir_side_effect
+        mock_listdir.return_value = ["repoA", "test-repo"]
+    
+        repos = script_service.list_local_repos()
+>       assert repos == ["repoA"]  # test-repo는 .git이 없으므로 제외
+E       AssertionError: assert [] == ['repoA']
+E         
+E         Right contains one more item: 'repoA'
+E         Use -v to get more diff
+
+tests/test_script_service.py:103: AssertionError
+__________________________ test_git_fetch_all_success __________________________
+
+mock_run = <MagicMock name='run' id='4381285920'>
+mock_list = <MagicMock name='list_local_repos' id='4381995648'>
+script_service = <src.serv.script_service.ScriptService object at 0x105251f10>
+
+    @patch("src.serv.script_service.ScriptService.list_local_repos")
+    @patch("subprocess.run")
+    def test_git_fetch_all_success(mock_run, mock_list, script_service):
+        """
+        list_local_repos -> ['repoA', 'repoB']
+        각 repo에 대해 git fetch origin main
+        """
+        mock_list.return_value = ["repoA", "repoB"]
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+    
+>       msg = script_service.git_fetch_all()
+
+tests/test_script_service.py:115: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/serv/script_service.py:101: in git_fetch_all
+    self.git_fetch_repo(repo_name)
+src/serv/script_service.py:105: in git_fetch_repo
+    self._get_repo(repo_name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.serv.script_service.ScriptService object at 0x105251f10>
+repo_name = 'repoA'
+
+    def _get_repo(self, repo_name):
+        if repo_name not in self.repos:
+            logger.error(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+>           raise ValueError(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+E           ValueError: Repo 'repoA' does not exist in executive-repository.
+
+src/serv/script_service.py:41: ValueError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'repoA' does not exist in executive-repository.
+___________________________ test_git_fetch_all_fail ____________________________
+
+mock_run = <MagicMock name='run' id='4380567776'>
+mock_list = <MagicMock name='list_local_repos' id='4380994912'>
+script_service = <src.serv.script_service.ScriptService object at 0x1051a2ee0>
+
+    @patch("src.serv.script_service.ScriptService.list_local_repos")
+    @patch("subprocess.run")
+    def test_git_fetch_all_fail(mock_run, mock_list, script_service):
+        """
+        한 레포에서 fetch 실패 -> RuntimeError
+        """
+        mock_list.return_value = ["repoA", "repoB"]
+        def side_effect(cmd, cwd, capture_output, text):
+            if cwd.endswith("repoA"):
+                return MagicMock(returncode=0)
+            else:
+                return MagicMock(returncode=1, stderr="fatal: couldn't find remote ref main")
+        mock_run.side_effect = side_effect
+    
+        with pytest.raises(RuntimeError) as exc:
+>           script_service.git_fetch_all()
+
+tests/test_script_service.py:134: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/serv/script_service.py:101: in git_fetch_all
+    self.git_fetch_repo(repo_name)
+src/serv/script_service.py:105: in git_fetch_repo
+    self._get_repo(repo_name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.serv.script_service.ScriptService object at 0x1051a2ee0>
+repo_name = 'repoA'
+
+    def _get_repo(self, repo_name):
+        if repo_name not in self.repos:
+            logger.error(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+>           raise ValueError(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+E           ValueError: Repo 'repoA' does not exist in executive-repository.
+
+src/serv/script_service.py:41: ValueError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'repoA' does not exist in executive-repository.
+_______________________ test_git_fetch_repo_main_success _______________________
+
+mock_run = <MagicMock name='run' id='4382260720'>
+mock_isdir = <MagicMock name='isdir' id='4380918016'>
+script_service = <src.serv.script_service.ScriptService object at 0x10533f790>
+
+    @patch("os.path.isdir")
+    @patch("subprocess.run")
+    def test_git_fetch_repo_main_success(mock_run, mock_isdir, script_service):
+        mock_isdir.return_value = True
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+>       msg = script_service.git_fetch_repo_main("repoA")
+
+tests/test_script_service.py:143: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/serv/script_service.py:123: in git_fetch_repo_main
+    self._get_repo(repo_name)  # 레포 존재 여부 확인
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.serv.script_service.ScriptService object at 0x10533f790>
+repo_name = 'repoA'
+
+    def _get_repo(self, repo_name):
+        if repo_name not in self.repos:
+            logger.error(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+>           raise ValueError(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+E           ValueError: Repo 'repoA' does not exist in executive-repository.
+
+src/serv/script_service.py:41: ValueError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'repoA' does not exist in executive-repository.
+______________________ test_git_fetch_repo_main_not_exist ______________________
+
+mock_run = <MagicMock name='run' id='4381274416'>
+mock_isdir = <MagicMock name='isdir' id='4380740384'>
+script_service = <src.serv.script_service.ScriptService object at 0x10524f8e0>
+
+    @patch("os.path.isdir")
+    @patch("subprocess.run")
+    def test_git_fetch_repo_main_not_exist(mock_run, mock_isdir, script_service):
+        mock_isdir.side_effect = [False]
+        with pytest.raises(ValueError) as excinfo:
+            script_service.git_fetch_repo_main("unknown")
+>       assert "Directory 'executive-repository/unknown' does not exist" in str(excinfo.value)
+E       assert "Directory 'executive-repository/unknown' does not exist" in "Repo 'unknown' does not exist in executive-repository."
+E        +  where "Repo 'unknown' does not exist in executive-repository." = str(ValueError("Repo 'unknown' does not exist in executive-repository."))
+E        +    where ValueError("Repo 'unknown' does not exist in executive-repository.") = <ExceptionInfo ValueError("Repo 'unknown' does not exist in executive-repository.") tblen=3>.value
+
+tests/test_script_service.py:152: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'unknown' does not exist in executive-repository.
+___________________________ test_status_repo_exists ____________________________
+
+mock_listdir = <MagicMock name='listdir' id='4382031536'>
+mock_isdir = <MagicMock name='isdir' id='4382260096'>
+script_service = <src.serv.script_service.ScriptService object at 0x105307370>
+
+    @patch("os.path.isdir", return_value=True)
+    @patch("os.listdir", return_value=["repo1"])
+    def test_status_repo_exists(mock_listdir, mock_isdir, script_service):
+>       status = script_service.status_repo("repo1")
+
+tests/test_script_service.py:196: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/serv/script_service.py:73: in status_repo
+    repo = self._get_repo(repo_name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.serv.script_service.ScriptService object at 0x105307370>
+repo_name = 'repo1'
+
+    def _get_repo(self, repo_name):
+        if repo_name not in self.repos:
+            logger.error(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+>           raise ValueError(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+E           ValueError: Repo 'repo1' does not exist in executive-repository.
+
+src/serv/script_service.py:41: ValueError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'repo1' does not exist in executive-repository.
+____________________________ test_start_then_status ____________________________
+
+mock_listdir = <MagicMock name='listdir' id='4381274656'>
+mock_isdir = <MagicMock name='isdir' id='4380574048'>
+script_service = <src.serv.script_service.ScriptService object at 0x1051609a0>
+
+    @patch("os.path.isdir", return_value=True)
+    @patch("os.listdir", return_value=["repo1"])
+    def test_start_then_status(mock_listdir, mock_isdir, script_service):
+>       script_service.start_repo("repo1")
+
+tests/test_script_service.py:202: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/serv/script_service.py:56: in start_repo
+    repo = self._get_repo(repo_name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <src.serv.script_service.ScriptService object at 0x1051609a0>
+repo_name = 'repo1'
+
+    def _get_repo(self, repo_name):
+        if repo_name not in self.repos:
+            logger.error(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+>           raise ValueError(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+E           ValueError: Repo 'repo1' does not exist in executive-repository.
+
+src/serv/script_service.py:41: ValueError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'repo1' does not exist in executive-repository.
+_________________________ test_status_repo_not_exists __________________________
+
+    def test_status_repo_not_exists():
+        service = ScriptService()
+        with pytest.raises(ValueError) as exc:
+            service.status_repo("nonexistent")
+>       assert "not found" in str(exc.value)
+E       assert 'not found' in "Repo 'nonexistent' does not exist in executive-repository."
+E        +  where "Repo 'nonexistent' does not exist in executive-repository." = str(ValueError("Repo 'nonexistent' does not exist in executive-repository."))
+E        +    where ValueError("Repo 'nonexistent' does not exist in executive-repository.") = <ExceptionInfo ValueError("Repo 'nonexistent' does not exist in executive-repository.") tblen=3>.value
+
+tests/test_script_service.py:210: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    src.serv.script_service:script_service.py:40 Repo 'nonexistent' does not exist in executive-repository.
+=========================== short test summary info ============================
+FAILED tests/test_discord_bot.py::test_git_fetch_repo - AssertionError: asser...
+FAILED tests/test_git_commands.py::test_git_fetch_repo - ValueError: Repo 're...
+FAILED tests/test_script_service.py::test_git_fetch_repo_success - ValueError...
+FAILED tests/test_script_service.py::test_git_fetch_repo_fail - ValueError: R...
+FAILED tests/test_script_service.py::test_git_fetch_repo_no_such_dir - assert...
+FAILED tests/test_script_service.py::test_list_local_repos - AssertionError: ...
+FAILED tests/test_script_service.py::test_git_fetch_all_success - ValueError:...
+FAILED tests/test_script_service.py::test_git_fetch_all_fail - ValueError: Re...
+FAILED tests/test_script_service.py::test_git_fetch_repo_main_success - Value...
+FAILED tests/test_script_service.py::test_git_fetch_repo_main_not_exist - ass...
+FAILED tests/test_script_service.py::test_status_repo_exists - ValueError: Re...
+FAILED tests/test_script_service.py::test_start_then_status - ValueError: Rep...
+FAILED tests/test_script_service.py::test_status_repo_not_exists - assert 'no...
+======================== 13 failed, 47 passed in 0.23s =========================

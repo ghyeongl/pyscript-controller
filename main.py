@@ -3,7 +3,7 @@ import asyncio
 import os
 import logging
 from src.infra.process_manager import ProcessManager
-from cli.discord_bot import DiscordBot
+from src.cli.discord_bot import DiscordBot
 
 # Logger 설정
 logging.basicConfig(level=logging.INFO)
@@ -11,11 +11,10 @@ logger = logging.getLogger(__name__)
 
 def load_discord_token(token_file="token.txt"):
     """
-    token_file에서 디스코드 봇 토큰을 읽어온 뒤 반환합니다.
-    끝에 개행이 있을 경우를 대비해 .strip()을 사용합니다.
+    token_file에서 디스코드 봇 토큰을 읽어온 뒤 반환.
     """
     file_path = os.path.join(os.path.dirname(__file__), token_file)
-    with open(file_path, 'r') as f:
+    with open(file_path, 'r', encoding='utf-8') as f:
         token = f.read().strip()
     return token
 

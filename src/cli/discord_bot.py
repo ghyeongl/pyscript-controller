@@ -2,18 +2,29 @@
 import discord
 import asyncio
 import shlex  # 문자열을 공백 기준으로 파싱, 따옴표 처리 등에 편리함
+import logging
+from src.infra.discord_log_handler import DiscordLogHandler
+
+logger = logging.getLogger(__name__)
 
 class DiscordBot:
-    def __init__(self, scriptService):
+    def __init__(self, manager=None, scriptService=None):
         """
-        scriptService: script_service.py에 정의된 ScriptService 인스턴스
+        manager: ProcessManager
+        scriptService: ScriptService (필요하다면 주입)
         """
+        self.manager = manager
         self.scriptService = scriptService
         self.client = discord.Client(intents=discord.Intents.default())
 
+        # 커스텀 로깅 핸들러(에러 로그를 별도 큐에 저장)
+        self.log_handler = DiscordLogHandler(level=logging.ERROR)
+        logging.getLogger().addHandler(self.log_handler)
+
         @self.client.event
         async def on_ready():
-            print(f"[DiscordBot] Logged in as {self.client.user}")
+            logger.info(f"[DiscordBot] Logged in as {self.client.user}")
+            self.client.loop.create_task(self._poll_log_queue())
 
         @self.client.event
         async def on_message(message):
@@ -56,6 +67,26 @@ class DiscordBot:
         """
         await self.client.start(token)
 
+    async def _poll_log_queue(self):
+        """
+        에러 로그 큐에서 메시지를 꺼내, 특정 채널로 전송.
+        channel_id는 원하는 채널로 설정.
+        """
+        channel_id = 123456789012345678
+        channel = None
+        while not self.client.is_closed():
+            try:
+                if channel is None:
+                    channel = self.client.get_channel(channel_id)
+                
+                while not self.log_handler.get_queue().empty():
+                    msg = self.log_handler.get_queue().get()
+                    if channel:
+                        await channel.send(f"[LogError] {msg}")
+            except Exception as e:
+                logger.error(f"Error in _poll_log_queue: {e}")
+            await asyncio.sleep(1)
+
     # -------------------------------------------------------------------------
     # 1) $repo 명령 처리
     # -------------------------------------------------------------------------
@@ -69,7 +100,7 @@ class DiscordBot:
           $repo --name "repo_name" kill
         """
         if not args:
-            await message.channel.send("Usage: $repo [list|--name REPO (start|stop|restart|kill) ...]")
+            await message.channel.send("Usage: $repo [list|--name REPO (start|stop|restart|kill|status) ...]")
             return
 
         if args[0] == "list":
@@ -102,13 +133,7 @@ class DiscordBot:
             await message.channel.send("Need to specify --name for this action.")
             return
 
-        if action == "status":
-            try:
-                status = self.scriptService.status_repo(repo_name)
-                await message.channel.send(f"Repo '{repo_name}' is {status}.")
-            except ValueError as e:
-                await message.channel.send(str(e))
-        elif action == "start":
+        if action == "start":
             self.scriptService.start_repo(repo_name, extra_arg)
             await message.channel.send(f"Started repo '{repo_name}' with arg {extra_arg}")
         elif action == "stop":
@@ -120,8 +145,14 @@ class DiscordBot:
         elif action == "kill":
             self.scriptService.kill_repo(repo_name)
             await message.channel.send(f"Killed repo '{repo_name}'.")
+        elif action == "status":
+            try:
+                st = self.scriptService.status_repo(repo_name)
+                await message.channel.send(f"Repo '{repo_name}' is {st}.")
+            except ValueError as e:
+                await message.channel.send(str(e))
         else:
-            await message.channel.send("Unknown action. Try start/stop/restart/kill.")
+            await message.channel.send("Unknown action. Try start/stop/restart/kill/status.")
 
     # -------------------------------------------------------------------------
     # 2) $log 명령 처리
@@ -199,7 +230,7 @@ class DiscordBot:
           $git fetch --all --repo "this_repo"
         """
         if not args:
-            await message.channel.send("Usage: $git fetch [--all] [--repo REPO_NAME]")
+            await message.channel.send("Usage: $git fetch [--all] [--repo REPO_NAME] | clone <URL>")
             return
 
         sub_cmd = args[0]  # e.g. "fetch"
@@ -215,10 +246,25 @@ class DiscordBot:
                     if f == "--repo" and i + 1 < len(flags):
                         repo_name = flags[i + 1]
                 if repo_name:
-                    self.scriptService.git_fetch_repo(repo_name)
-                    await message.channel.send(f"Fetched repo {repo_name}.")
+                    try:
+                        result = self.scriptService.git_fetch_repo(repo_name)
+                        await message.channel.send(result)
+                    except (ValueError, RuntimeError) as e:
+                        await message.channel.send(str(e))
                 else:
                     await message.channel.send("No repo specified.")
+        elif sub_cmd == "clone":
+            if not flags:
+                await message.channel.send("No repo URL specified.")
+                return
+
+            repo_url = flags[0]
+            try:
+                result_msg = self.scriptService.git_clone(repo_url)
+                await message.channel.send(result_msg)
+            except (ValueError, RuntimeError) as e:
+                await message.channel.send(str(e))
+            return
         else:
             await message.channel.send(f"Unknown git command: {sub_cmd}")
 
@@ -275,11 +321,11 @@ class DiscordBot:
         help_msg = (
             "**Command list**\n"
             "$repo list\n"
-            "$repo --name \"repo_name\" [start|stop|restart|kill] [--arg \"args\"]\n"
+            "$repo --name \"repo_name\" [start|stop|restart|kill|status] [--arg \"args\"]\n"
             "$log --all | --today | --repo \"repo_name\" | --debug ...\n"
             "$system restart [--alert]\n"
             "$system status [--cpu] [--temp]\n"
-            "$git fetch --all | --repo \"repo_name\"\n"
+            "$git fetch --all | --repo \"repo_name\" | clone <URL>\n"
             "$container --list | --name \"container_name\" --start\n"
             "$help (this message)\n"
         )

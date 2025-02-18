@@ -1,0 +1,1658 @@
+./seeker.py
+#!/usr/bin/env python3
+import os
+
+def seeker(root_dir='.'):
+    """
+    root_dir부터 시작하여 모든 하위 디렉토리까지 탐색하면서
+    확장자가 .py 인 모든 파일의 경로와 파일 내용을 순서대로 출력합니다.
+    """
+    for current_path, dirs, files in os.walk(root_dir):
+        for file_name in files:
+            if file_name.endswith('.py'):
+                full_path = os.path.join(current_path, file_name)
+                print(full_path)  # 경로명 출력
+                try:
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        print(content)  # 파일 내용 출력
+                except Exception as e:
+                    print(f"파일을 열 수 없습니다: {e}")
+
+if __name__ == "__main__":
+    seeker()
+
+./main.py
+# main.py
+import asyncio
+import os
+import logging
+from src.infra.process_manager import ProcessManager
+from src.cli.discord_bot import DiscordBot
+
+# Logger 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def load_discord_token(token_file="token.txt"):
+    """
+    token_file에서 디스코드 봇 토큰을 읽어온 뒤 반환.
+    """
+    file_path = os.path.join(os.path.dirname(__file__), token_file)
+    with open(file_path, 'r', encoding='utf-8') as f:
+        token = f.read().strip()
+    return token
+
+def main():
+    logger.info("[Controller] Starting pyscript-controller...")
+    manager = ProcessManager(exec_repo_path="executive-repository")  # or absolute path
+    bot = DiscordBot(manager=manager)
+    
+    # 1) Discord 봇 구동(비동기로 이벤트 루프)
+    loop = asyncio.get_event_loop()
+
+    # 별도 함수로부터 토큰을 로드
+    token = load_discord_token("token.txt")
+
+    # Discord Bot 구동
+    loop.create_task(bot.run_discord_bot(token=token))
+    
+    # 2) 레포의 main.py 실행
+    manager.start_all()
+
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        logger.info("[Controller] Shutting down...")
+    finally:
+        manager.stop_all()
+        loop.stop()
+
+if __name__ == "__main__":
+    main()
+
+./tests/test_script_service.py
+import pytest
+from unittest.mock import patch, MagicMock
+import logging
+from src.serv.script_service import ScriptService
+
+@pytest.fixture
+def script_service():
+    return ScriptService(exec_repo_path="executive-repository")
+
+@patch("os.listdir")
+@patch("os.path.isdir")
+def test_load_local_repos(mock_isdir, mock_listdir):
+    """
+    - executive-repository 폴더 안에 ['repo1', 'repo2', 'somefile.txt']
+    - repo1, repo2는 디렉터리, somefile.txt는 파일
+    -> repos = { 'repo1': Repository('repo1'), 'repo2': ... }
+    """
+    def isdir_side_effect(path):
+        if path == "executive-repository":
+            return True
+        elif path == "executive-repository/repo1":
+            return True
+        elif path == "executive-repository/repo2":
+            return True
+        elif path == "executive-repository/somefile.txt":
+            return False
+        return False
+
+    mock_isdir.side_effect = isdir_side_effect
+    mock_listdir.return_value = ["repo1", "repo2", "somefile.txt"]
+
+    service = ScriptService(exec_repo_path="executive-repository")
+    assert service.get_repo_list() == ["repo1", "repo2"]
+
+@patch("subprocess.run")
+@patch("os.path.isdir", return_value=True)
+def test_git_fetch_repo_success(mock_isdir, mock_run, script_service, caplog):
+    mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="fetch success")
+
+    with caplog.at_level(logging.INFO):
+        result_msg = script_service.git_fetch_repo("repo1")
+    
+    assert "Fetched repo 'repo1' successfully." in result_msg
+    assert any("Fetched repo 'repo1' successfully." in rec.message for rec in caplog.records)
+
+    mock_run.assert_called_once_with(
+        ["git", "fetch", "origin"],
+        cwd="executive-repository/repo1",
+        capture_output=True,
+        text=True
+    )
+
+@patch("subprocess.run")
+@patch("os.path.isdir", return_value=True)
+def test_git_fetch_repo_fail(mock_isdir, mock_run, script_service, caplog):
+    mock_run.return_value = MagicMock(returncode=1, stderr="some git error", stdout="")
+
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(RuntimeError) as excinfo:
+            script_service.git_fetch_repo("repo1")
+        assert "git fetch failed: some git error" in str(excinfo.value)
+        assert any("git fetch failed: some git error" in rec.message for rec in caplog.records)
+
+@patch("subprocess.run")
+@patch("os.path.isdir", return_value=False)
+def test_git_fetch_repo_no_such_dir(mock_isdir, mock_run, script_service, caplog):
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(ValueError) as excinfo:
+            script_service.git_fetch_repo("unknown")
+        assert "Repo 'unknown' not found" in str(excinfo.value)
+    mock_run.assert_not_called()
+
+@patch("os.listdir")
+@patch("os.path.isdir")
+def test_list_local_repos(mock_isdir, mock_listdir, script_service):
+    """
+    - executive-repository 폴더 내부에 'repoA', 'test-repo' 폴더가 있다고 가정
+    - repoA/.git 은 있음
+    - test-repo/.git 은 없음
+    """
+    def isdir_side_effect(path):
+        if path == "executive-repository":
+            return True
+        if path == "executive-repository/repoA":
+            return True
+        if path == "executive-repository/test-repo":
+            return True
+        if path == "executive-repository/repoA/.git":
+            return True
+        if path == "executive-repository/test-repo/.git":
+            return False
+        return False
+
+    mock_isdir.side_effect = isdir_side_effect
+    mock_listdir.return_value = ["repoA", "test-repo"]
+
+    repos = script_service.list_local_repos()
+    assert repos == ["repoA"]  # test-repo는 .git이 없으므로 제외
+
+@patch("src.serv.script_service.ScriptService.list_local_repos")
+@patch("subprocess.run")
+def test_git_fetch_all_success(mock_run, mock_list, script_service):
+    """
+    list_local_repos -> ['repoA', 'repoB']
+    각 repo에 대해 git fetch origin main
+    """
+    mock_list.return_value = ["repoA", "repoB"]
+    mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+
+    msg = script_service.git_fetch_all()
+    assert msg == "Fetched all local repos successfully."
+    assert mock_run.call_count == 2
+
+@patch("src.serv.script_service.ScriptService.list_local_repos")
+@patch("subprocess.run")
+def test_git_fetch_all_fail(mock_run, mock_list, script_service):
+    """
+    한 레포에서 fetch 실패 -> RuntimeError
+    """
+    mock_list.return_value = ["repoA", "repoB"]
+    def side_effect(cmd, cwd, capture_output, text):
+        if cwd.endswith("repoA"):
+            return MagicMock(returncode=0)
+        else:
+            return MagicMock(returncode=1, stderr="fatal: couldn't find remote ref main")
+    mock_run.side_effect = side_effect
+
+    with pytest.raises(RuntimeError) as exc:
+        script_service.git_fetch_all()
+    assert "fatal: couldn't find remote ref main" in str(exc.value)
+    assert mock_run.call_count == 2
+
+@patch("os.path.isdir")
+@patch("subprocess.run")
+def test_git_fetch_repo_main_success(mock_run, mock_isdir, script_service):
+    mock_isdir.return_value = True
+    mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+    msg = script_service.git_fetch_repo_main("repoA")
+    assert "Fetched repo 'repoA' (branch main) successfully." in msg
+
+@patch("os.path.isdir")
+@patch("subprocess.run")
+def test_git_fetch_repo_main_not_exist(mock_run, mock_isdir, script_service):
+    mock_isdir.side_effect = [False]
+    with pytest.raises(ValueError) as excinfo:
+        script_service.git_fetch_repo_main("unknown")
+    assert "Directory 'executive-repository/unknown' does not exist" in str(excinfo.value)
+    mock_run.assert_not_called()
+
+@patch("os.path.isdir")
+@patch("subprocess.run")
+def test_git_fetch_repo_main_fail(mock_run, mock_isdir, script_service):
+    mock_isdir.return_value = True
+    mock_run.return_value = MagicMock(returncode=128, stderr="fatal: couldn't find remote ref main")
+    with pytest.raises(RuntimeError) as excinfo:
+        script_service.git_fetch_repo_main("test-repo")
+    assert "couldn't find remote ref main" in str(excinfo.value)
+
+@patch("subprocess.run")
+def test_git_clone_success(mock_run, script_service, caplog):
+    mock_run.return_value = MagicMock(returncode=0, stdout="clone success", stderr="")
+    
+    with caplog.at_level(logging.INFO):
+        msg = script_service.git_clone("git@github.com:ghyeongl/budget-calc-discord-bot.git")
+    
+    assert "Cloned repo from git@github.com:ghyeongl/budget-calc-discord-bot.git." in msg
+    mock_run.assert_called_once_with(
+        ["git", "clone", "git@github.com:ghyeongl/budget-calc-discord-bot.git"],
+        cwd="executive-repository",
+        capture_output=True,
+        text=True
+    )
+    assert any("Cloned repo from git@github.com:ghyeongl/budget-calc-discord-bot.git." 
+               in rec.message for rec in caplog.records)
+
+@patch("subprocess.run")
+def test_git_clone_fail(mock_run, script_service, caplog):
+    mock_run.return_value = MagicMock(returncode=128, stdout="", stderr="Permission denied")
+
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(RuntimeError) as excinfo:
+            script_service.git_clone("git@github.com:ghyeongl/budget-calc-discord-bot.git")
+        assert "git clone failed for git@github.com:ghyeongl/budget-calc-discord-bot.git: Permission denied" in str(excinfo.value)
+    mock_run.assert_called_once()
+    assert any("git clone failed for git@github.com:ghyeongl/budget-calc-discord-bot.git" in rec.message 
+               for rec in caplog.records)
+
+def test_status_repo_exists():
+    service = ScriptService()
+    status = service.status_repo("repo1")
+    assert status == "stopped"
+
+def test_status_repo_not_exists():
+    service = ScriptService()
+    with pytest.raises(ValueError) as exc:
+        service.status_repo("nonexistent")
+    assert "not found" in str(exc.value)
+
+def test_start_then_status():
+    service = ScriptService()
+    service.start_repo("repo1")  
+    status = service.status_repo("repo1")
+    assert status == "running"
+
+./tests/test_discord_bot.py
+import pytest
+import asyncio
+from unittest.mock import MagicMock, AsyncMock
+from src.cli.discord_bot import DiscordBot
+
+@pytest.fixture
+def scriptService_mock():
+    """ScriptService를 모킹하여 반환."""
+    return MagicMock()
+
+@pytest.fixture
+def bot(scriptService_mock):
+    """
+    DiscordBot 인스턴스 생성.
+    - scriptService를 mock으로 주입
+    """
+    return DiscordBot(scriptService=scriptService_mock)
+
+@pytest.fixture
+def message():
+    """
+    Discord 메시지 객체를 mock으로 생성.
+    - content, channel, author 등 자주 쓰는 속성만 설정
+    """
+    msg = MagicMock()
+    msg.author = MagicMock()
+    channel_mock = MagicMock()
+    channel_mock.send = AsyncMock()
+    msg.channel = channel_mock
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_unknown_command(bot, message):
+    """
+    '$abc' 처럼 존재하지 않는 명령이 들어왔을 때
+    Unknown command: abc
+    """
+    message.content = "$abc"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Unknown command: abc" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_help_command(bot, message):
+    """
+    '$help' -> help_msg가 전송되는지
+    """
+    message.content = "$help"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Command list" in sent_args[0]
+    assert "$repo list" in sent_args[0]
+
+
+# -----------------------------------------------------------------------------
+# REPO 명령어 관련
+# -----------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_repo_no_args(bot, message):
+    """
+    '$repo' -> Usage 안내
+    """
+    message.content = "$repo"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Usage: $repo" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_repo_list(bot, message, scriptService_mock):
+    """
+    '$repo list' -> scriptService.get_repo_list() 호출, 결과를 채널에 전송
+    """
+    message.content = "$repo list"
+    scriptService_mock.get_repo_list.return_value = ["repo1", "repo2"]
+
+    await bot.client.on_message(message)
+
+    scriptService_mock.get_repo_list.assert_called_once()
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Repo list: ['repo1', 'repo2']" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_repo_start(bot, message, scriptService_mock):
+    """
+    '$repo --name "myrepo" start --arg "-v"'
+    -> scriptService.start_repo("myrepo", "-v")
+    """
+    message.content = '$repo --name "myrepo" start --arg "-v"'
+    await bot.client.on_message(message)
+
+    scriptService_mock.start_repo.assert_called_once_with("myrepo", "-v")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Started repo 'myrepo' with arg -v" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_repo_stop(bot, message, scriptService_mock):
+    message.content = '$repo --name "myrepo" stop'
+    await bot.client.on_message(message)
+
+    scriptService_mock.stop_repo.assert_called_once_with("myrepo")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Stopped repo 'myrepo'." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_repo_restart(bot, message, scriptService_mock):
+    message.content = '$repo --name "myrepo" restart'
+    await bot.client.on_message(message)
+
+    scriptService_mock.restart_repo.assert_called_once_with("myrepo")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Restarted repo 'myrepo'." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_repo_kill(bot, message, scriptService_mock):
+    message.content = '$repo --name "myrepo" kill'
+    await bot.client.on_message(message)
+
+    scriptService_mock.kill_repo.assert_called_once_with("myrepo")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Killed repo 'myrepo'." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_repo_no_name(bot, message):
+    """
+    '$repo stop' -> --name 없이 stop이 들어오면 "Need to specify --name"
+    """
+    message.content = "$repo stop"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Need to specify --name" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_repo_status(bot, message, scriptService_mock):
+    """
+    '$repo --name "myrepo" status'
+    """
+    # given
+    message.content = '$repo --name "myrepo" status'
+    scriptService_mock.status_repo.return_value = "running"
+
+    # when
+    await bot.client.on_message(message)
+
+    # then
+    scriptService_mock.status_repo.assert_called_once_with("myrepo")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Repo 'myrepo' is running." in sent_args[0]
+
+@pytest.mark.asyncio
+async def test_repo_status_nonexistent(bot, message, scriptService_mock):
+    """
+    없는 레포 조회 시 -> ValueError -> Discord에 에러 메시지 전송
+    """
+    message.content = '$repo --name "foo" status'
+    scriptService_mock.status_repo.side_effect = ValueError("Repo 'foo' not found.")
+
+    await bot.client.on_message(message)
+
+    scriptService_mock.status_repo.assert_called_once_with("foo")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Repo 'foo' not found." in sent_args[0]
+
+
+# -----------------------------------------------------------------------------
+# LOG 명령어 관련
+# -----------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_log_no_args(bot, message):
+    """
+    '$log' -> Usage
+    """
+    message.content = "$log"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Usage: $log" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_log_all(bot, message, scriptService_mock):
+    """
+    '$log --all' -> scriptService.get_all_logs()
+    """
+    message.content = "$log --all"
+    scriptService_mock.get_all_logs.return_value = "ALL LOGS"
+
+    await bot.client.on_message(message)
+
+    scriptService_mock.get_all_logs.assert_called_once()
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "ALL LOGS" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_log_today(bot, message, scriptService_mock):
+    """
+    '$log --today' -> scriptService.get_today_logs()
+    """
+    message.content = "$log --today"
+    scriptService_mock.get_today_logs.return_value = "TODAY LOGS"
+
+    await bot.client.on_message(message)
+
+    scriptService_mock.get_today_logs.assert_called_once()
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "TODAY LOGS" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_log_invalid(bot, message):
+    """
+    '$log --unknown' -> "No valid log option found."
+    """
+    message.content = "$log --unknown"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "No valid log option found." in sent_args[0]
+
+
+# -----------------------------------------------------------------------------
+# SYSTEM 명령어 관련
+# -----------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_system_no_args(bot, message):
+    """
+    '$system' -> Usage
+    """
+    message.content = "$system"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Usage: $system" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_system_restart(bot, message, scriptService_mock):
+    """
+    '$system restart' -> scriptService.restart_system(alert=False)
+    """
+    message.content = "$system restart"
+    await bot.client.on_message(message)
+
+    scriptService_mock.restart_system.assert_called_once_with(alert=False)
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "System restarting..." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_system_restart_alert(bot, message, scriptService_mock):
+    """
+    '$system restart --alert' -> scriptService.restart_system(alert=True)
+    """
+    message.content = "$system restart --alert"
+    await bot.client.on_message(message)
+
+    scriptService_mock.restart_system.assert_called_once_with(alert=True)
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Alert mode on" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_system_status(bot, message, scriptService_mock):
+    """
+    '$system status' -> CPU/Temp 없는 경우 None
+    """
+    message.content = "$system status"
+    # 기본: cpu/temp는 None
+    scriptService_mock.get_cpu_usage.return_value = None
+    scriptService_mock.get_temp.return_value = None
+
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    # System status:
+    # (no CPU or Temp lines)
+    assert "System status:" in sent_args[0]
+    assert "CPU" not in sent_args[0]
+    assert "Temp" not in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_system_status_cpu_temp(bot, message, scriptService_mock):
+    """
+    '$system status --cpu --temp'
+      -> scriptService.get_cpu_usage()
+      -> scriptService.get_temp()
+    """
+    message.content = "$system status --cpu --temp"
+    scriptService_mock.get_cpu_usage.return_value = "CPU usage X"
+    scriptService_mock.get_temp.return_value = "Temp Y"
+
+    await bot.client.on_message(message)
+
+    scriptService_mock.get_cpu_usage.assert_called_once()
+    scriptService_mock.get_temp.assert_called_once()
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "CPU usage X" in sent_args[0]
+    assert "Temp Y" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_system_unknown(bot, message):
+    """
+    '$system something' -> Unknown system command
+    """
+    message.content = "$system something"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Unknown system command: something" in sent_args[0]
+
+
+# -----------------------------------------------------------------------------
+# GIT 명령어 관련
+# -----------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_git_no_args(bot, message):
+    """
+    '$git' -> Usage
+    """
+    message.content = "$git"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Usage: $git fetch" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_git_fetch_all(bot, message, scriptService_mock):
+    """
+    '$git fetch --all'
+    """
+    message.content = "$git fetch --all"
+    await bot.client.on_message(message)
+
+    scriptService_mock.git_fetch_all.assert_called_once()
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Fetched all repos." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_git_fetch_repo(bot, message, scriptService_mock):
+    """
+    '$git fetch --repo myrepo'
+    """
+    message.content = "$git fetch --repo myrepo"
+    await bot.client.on_message(message)
+
+    scriptService_mock.git_fetch_repo.assert_called_once_with("myrepo")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Fetched repo myrepo." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_git_fetch_no_repo(bot, message):
+    """
+    '$git fetch --repo' -> usage
+    """
+    message.content = "$git fetch --repo"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "No repo specified." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_git_unknown_subcmd(bot, message):
+    """
+    '$git push' -> Unknown git command: push
+    """
+    message.content = "$git push"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Unknown git command: push" in sent_args[0]
+
+
+# -----------------------------------------------------------------------------
+# CONTAINER 명령어 관련
+# -----------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_container_no_args(bot, message):
+    """
+    '$container' -> Usage
+    """
+    message.content = "$container"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Usage: $container --list" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_container_list(bot, message, scriptService_mock):
+    """
+    '$container --list' -> scriptService.list_containers()
+    """
+    message.content = "$container --list"
+    scriptService_mock.list_containers.return_value = ["c1", "c2"]
+
+    await bot.client.on_message(message)
+
+    scriptService_mock.list_containers.assert_called_once()
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Container list: ['c1', 'c2']" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_container_start(bot, message, scriptService_mock):
+    """
+    '$container --name mycont --start'
+    """
+    message.content = "$container --name mycont --start"
+    await bot.client.on_message(message)
+
+    scriptService_mock.container_start.assert_called_once_with("mycont")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Container 'mycont' started." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_container_stop(bot, message, scriptService_mock):
+    """
+    '$container --name mycont --stop'
+    """
+    message.content = "$container --name mycont --stop"
+    await bot.client.on_message(message)
+
+    scriptService_mock.container_stop.assert_called_once_with("mycont")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Container 'mycont' stopped." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_container_restart(bot, message, scriptService_mock):
+    """
+    '$container --name mycont --restart'
+    """
+    message.content = "$container --name mycont --restart"
+    await bot.client.on_message(message)
+
+    scriptService_mock.container_restart.assert_called_once_with("mycont")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Container 'mycont' restarted." in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_container_no_name(bot, message):
+    """
+    '$container --start' -> Please specify --name
+    """
+    message.content = "$container --start"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Please specify --name" in sent_args[0]
+
+
+@pytest.mark.asyncio
+async def test_container_unknown_action(bot, message):
+    """
+    '$container --name cont --foobar' -> Unknown container action
+    """
+    message.content = "$container --name cont --foobar"
+    await bot.client.on_message(message)
+
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Unknown container action." in sent_args[0]
+
+./tests/test_container_service.py
+import pytest
+from unittest.mock import patch, MagicMock
+from src.serv.container_service import ContainerService
+
+@patch("subprocess.check_output")
+def test_list_containers(mock_check_output):
+    """
+    docker ps -a --format "{{.Names}}" 명령이 실행되고,
+    반환된 목록을 파싱하는지 검증
+    """
+    service = ContainerService()
+
+    # 가짜 출력: b"cont1\ncont2\n"
+    mock_check_output.return_value = b"cont1\ncont2\n"
+
+    containers = service.list_containers()
+    assert containers == ["cont1", "cont2"]
+
+    # subprocess.check_output가 이렇게 호출되었는지 확인
+    mock_check_output.assert_called_once_with(["docker", "ps", "-a", "--format", "{{.Names}}"])
+
+
+@patch("subprocess.run")
+@patch("subprocess.check_output")
+def test_start_container(mock_check_output, mock_run):
+    """
+    docker ps -a -> cont1, cont2
+    docker start cont1
+    """
+    service = ContainerService()
+
+    # list_containers() 호출 시 "cont1"만 있다고 가정
+    mock_check_output.return_value = b"cont1\n"
+
+    service.start_container("cont1")
+
+    # 먼저 list_containers()가 불려서 docker ps -a 확인
+    mock_check_output.assert_called_once_with(["docker", "ps", "-a", "--format", "{{.Names}}"])
+
+    # 이후 docker start cont1
+    mock_run.assert_called_once_with(["docker", "start", "cont1"], check=True)
+
+
+@patch("subprocess.run")
+@patch("subprocess.check_output")
+def test_start_container_not_exists(mock_check_output, mock_run):
+    """
+    컨테이너 목록에 없는 이름 start 시도
+    """
+    service = ContainerService()
+    mock_check_output.return_value = b"cont1\ncont2\n"
+
+    with pytest.raises(ValueError) as exc:
+        service.start_container("unknown")
+    
+    # docker start는 절대 불리지 않아야 함
+    mock_run.assert_not_called()
+    assert "Container 'unknown' does not exist." in str(exc.value)
+
+
+@patch("subprocess.run")
+@patch("subprocess.check_output")
+def test_stop_container(mock_check_output, mock_run):
+    """
+    docker ps -a -> cont1, cont2
+    docker stop cont2
+    """
+    service = ContainerService()
+    mock_check_output.return_value = b"cont1\ncont2\n"
+
+    service.stop_container("cont2")
+
+    # list_containers()는 1번 호출
+    mock_check_output.assert_called_once_with(["docker", "ps", "-a", "--format", "{{.Names}}"])
+    # docker stop cont2 실행
+    mock_run.assert_called_once_with(["docker", "stop", "cont2"], check=True)
+
+./tests/test_manager.py
+
+./tests/test_discord_bot_git.py
+import pytest
+import asyncio
+from unittest.mock import MagicMock, AsyncMock
+from src.cli.discord_bot import DiscordBot
+
+@pytest.fixture
+def scriptService_mock():
+    return MagicMock()
+
+@pytest.fixture
+def bot(scriptService_mock):
+    return DiscordBot(scriptService=scriptService_mock)
+
+@pytest.fixture
+def message():
+    msg = MagicMock()
+    msg.author = MagicMock()
+    channel_mock = MagicMock()
+    channel_mock.send = AsyncMock()
+    msg.channel = channel_mock
+    return msg
+
+@pytest.mark.asyncio
+async def test_git_fetch_repo_command(bot, message, scriptService_mock):
+    """
+    '$git fetch --repo myrepo'
+    """
+    message.content = "$git fetch --repo myrepo"
+    scriptService_mock.git_fetch_repo.return_value = "Fetched repo myrepo successfully."
+    
+    await bot.client.on_message(message)
+    
+    scriptService_mock.git_fetch_repo.assert_called_once_with("myrepo")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Fetched repo myrepo successfully." in sent_args[0]
+
+@pytest.mark.asyncio
+async def test_git_fetch_repo_error(bot, message, scriptService_mock):
+    """
+    Service에서 ValueError 발생 시, 봇이 에러 메시지를 채널로 보낸다.
+    """
+    message.content = "$git fetch --repo unknown"
+
+    scriptService_mock.git_fetch_repo.side_effect = ValueError("Repo not found!")
+    
+    await bot.client.on_message(message)
+
+    scriptService_mock.git_fetch_repo.assert_called_once_with("unknown")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Repo not found!" in sent_args[0]
+
+@pytest.mark.asyncio
+async def test_git_clone_command(bot, message, scriptService_mock):
+    """
+    '$git clone git@github.com:ghyeongl/budget-calc-discord-bot.git'
+    """
+    message.content = "$git clone git@github.com:ghyeongl/budget-calc-discord-bot.git"
+    scriptService_mock.git_clone.return_value = "Cloned repo from git@github.com:ghyeongl/budget-calc-discord-bot.git."
+    
+    await bot.client.on_message(message)
+
+    scriptService_mock.git_clone.assert_called_once_with("git@github.com:ghyeongl/budget-calc-discord-bot.git")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "Cloned repo from git@github.com:ghyeongl/budget-calc-discord-bot.git." in sent_args[0]
+
+@pytest.mark.asyncio
+async def test_git_clone_error(bot, message, scriptService_mock):
+    """
+    Service에서 RuntimeError 발생 시, 봇이 에러 메시지를 채널로 보낸다.
+    """
+    message.content = "$git clone git@github.com:ghyeongl/budget-calc-discord-bot.git"
+
+    scriptService_mock.git_clone.side_effect = RuntimeError("git clone failed!")
+    
+    await bot.client.on_message(message)
+
+    scriptService_mock.git_clone.assert_called_once_with("git@github.com:ghyeongl/budget-calc-discord-bot.git")
+    message.channel.send.assert_called_once()
+    sent_args, _ = message.channel.send.call_args
+    assert "git clone failed!" in sent_args[0]
+
+./tests/test_git_commands.py
+import pytest
+from unittest.mock import patch, MagicMock
+from src.serv.script_service import ScriptService
+
+@pytest.fixture
+def script_service():
+    return ScriptService(exec_repo_path="executive-repository")
+
+@patch("subprocess.run")
+def test_git_fetch_repo(mock_run, script_service):
+    with patch("os.path.isdir", return_value=True):
+        mock_run.return_value = MagicMock(returncode=0, stdout="fetch success", stderr="")
+        
+        script_service.git_fetch_repo("repo1")
+        mock_run.assert_called_once_with(
+            ["git", "fetch", "origin"],
+            cwd="executive-repository/repo1",
+            capture_output=True,
+            text=True
+        )
+
+@patch("subprocess.run")
+def test_git_fetch_repo_not_exist(mock_run, script_service):
+    with patch("os.path.isdir", return_value=False):
+        with pytest.raises(ValueError) as exc:
+            script_service.git_fetch_repo("unknown")
+        assert "does not exist" in str(exc.value)
+    mock_run.assert_not_called()
+
+@patch("subprocess.run")
+def test_git_clone_success(mock_run, script_service):
+    mock_run.return_value = MagicMock(returncode=0, stdout="clone success", stderr="")
+    script_service.git_clone("git@github.com:ghyeongl/budget-calc-discord-bot.git")
+
+    mock_run.assert_called_once_with(
+        ["git", "clone", "git@github.com:ghyeongl/budget-calc-discord-bot.git"],
+        cwd="executive-repository",
+        capture_output=True,
+        text=True
+    )
+
+@patch("subprocess.run")
+def test_git_clone_fail(mock_run, script_service):
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="clone error")
+    with pytest.raises(RuntimeError) as exc:
+        script_service.git_clone("git@github.com:ghyeongl/budget-calc-discord-bot.git")
+    assert "git clone failed" in str(exc.value)
+
+./executive-repository/test-repo/main.py
+print("[test-repo] Hello, I'm a sample repo main.py.")
+print("[test-repo] Doing some work...")
+./src/__init__.py
+# 아무 내용 없이 패키지 인식용
+
+./src/infra/discord_log_handler.py
+import logging
+from queue import Queue
+
+class DiscordLogHandler(logging.Handler):
+    """
+    레벨≥ERROR 로그가 발생하면 이 핸들러가 큐에 메시지를 쌓는다.
+    DiscordBot이 별도 태스크로 큐를 모니터링하고, 채널에 전송.
+    """
+
+    def __init__(self, level=logging.ERROR):
+        super().__init__(level=level)
+        self.queue = Queue()
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = self.format(record)
+            self.queue.put(msg)
+        except Exception:
+            self.handleError(record)
+
+    def get_queue(self):
+        return self.queue
+
+./src/infra/__init__.py
+
+./src/infra/signal_interface.py
+# signal_interface.py
+
+"""
+각 레포 main.py가 import해서 사용하는 공용 인터페이스 예시
+'컨트롤러' 쪽에 로그나 메세지를 보낼 수 있는 스텁 함수들
+실제로는 IPC나 소켓을 통해 ProcessManager/DiscordBot에 전달되도록 구현 가능
+"""
+
+def log(message: str):
+    print(f"[REPO-LOG] {message}")
+
+def warn(message: str):
+    print(f"[REPO-WARN] {message}")
+
+def send_event(event_type: str, data: dict):
+    print(f"[REPO-EVENT] type={event_type}, data={data}")
+
+./src/infra/process_manager.py
+# process_manager.py
+import os
+import subprocess
+import glob
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
+class ProcessManager:
+    def __init__(self, exec_repo_path):
+        self.exec_repo_path = exec_repo_path
+        self.processes = []  # (repo_name, Popen_object)
+    
+    def start_all(self):
+        logger.info("[ProcessManager] Scanning for main.py in: %s", self.exec_repo_path)
+        pattern = os.path.join(self.exec_repo_path, "*", "main.py")
+        main_files = glob.glob(pattern)
+        
+        for mf in main_files:
+            repo_name = os.path.basename(os.path.dirname(mf))
+            logger.info(f"[ProcessManager] Launching {repo_name} from {mf}")
+            p = subprocess.Popen(["python", mf], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.processes.append((repo_name, p))
+        
+        asyncio.ensure_future(self._collect_logs())
+    
+    def stop_all(self):
+        logger.info("[ProcessManager] Stopping all processes...")
+        for repo_name, proc in self.processes:
+            if proc.poll() is None:  # 아직 종료 안 됨
+                proc.terminate()
+        self.processes.clear()
+
+    async def _collect_logs(self):
+        while True:
+            for repo_name, proc in list(self.processes):
+                if proc.poll() is not None:
+                    self.processes.remove((repo_name, proc))
+                    logger.info(f"[ProcessManager] {repo_name} exited with code {proc.returncode}")
+                else:
+                    pass
+            await asyncio.sleep(2)
+    
+    def send_signal(self, repo_name, signal_type):
+        for rn, proc in self.processes:
+            if rn == repo_name:
+                if signal_type == "STOP":
+                    proc.terminate()
+                    logger.info(f"[ProcessManager] Sent STOP to {repo_name}")
+                break
+
+    def start_repo_process(self, repo_name, extra_arg=None):
+        main_script = os.path.join(self.exec_repo_path, repo_name, "main.py")
+        cmd = ["python", main_script]
+        if extra_arg:
+            cmd.append(extra_arg)
+
+        logger.info(f"[ProcessManager] Starting repo '{repo_name}' with command: {cmd}")
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.processes.append((repo_name, p))
+        logger.info(f"[ProcessManager] '{repo_name}' pid={p.pid} started.")
+
+    def stop_repo_process(self, repo_name):
+        for i, (rn, proc) in enumerate(self.processes):
+            if rn == repo_name and proc.poll() is None:
+                proc.terminate()
+                logger.info(f"[ProcessManager] '{repo_name}' (pid={proc.pid}) terminated.")
+                self.processes.pop(i)
+                return
+        logger.warning(f"[ProcessManager] '{repo_name}' not found or already stopped.")
+
+./src/infra/message_router.py
+
+./src/cli/discord_bot.py
+# discord_bot.py
+import discord
+import asyncio
+import shlex  # 문자열을 공백 기준으로 파싱, 따옴표 처리 등에 편리함
+import logging
+from src.infra.discord_log_handler import DiscordLogHandler
+
+logger = logging.getLogger(__name__)
+
+class DiscordBot:
+    def __init__(self, manager=None, scriptService=None):
+        """
+        manager: ProcessManager
+        scriptService: ScriptService (필요하다면 주입)
+        """
+        self.manager = manager
+        self.scriptService = scriptService
+        self.client = discord.Client(intents=discord.Intents.default())
+
+        # 커스텀 로깅 핸들러(에러 로그를 별도 큐에 저장)
+        self.log_handler = DiscordLogHandler(level=logging.ERROR)
+        logging.getLogger().addHandler(self.log_handler)
+
+        @self.client.event
+        async def on_ready():
+            logger.info(f"[DiscordBot] Logged in as {self.client.user}")
+            self.client.loop.create_task(self._poll_log_queue())
+
+        @self.client.event
+        async def on_message(message):
+            # 봇이 스스로 보내는 메시지는 무시
+            if message.author == self.client.user:
+                return
+
+            # 봇 명령은 $로 시작한다고 가정
+            if not message.content.startswith("$"):
+                return
+
+            # shlex.split()을 사용하면,
+            #  "$repo --name \"repo_name\" restart" 같은 명령에서
+            #  따옴표로 묶인 부분을 제대로 하나의 토큰으로 파싱해줌
+            tokens = shlex.split(message.content)
+            # tokens[0] = '$repo', tokens[1] = '--name', tokens[2] = 'repo_name', tokens[3] = 'restart' ...
+
+            main_cmd = tokens[0][1:]  # '$repo'에서 '$' 제거 → 'repo'
+            args = tokens[1:]        # 나머지는 서브명령/옵션들
+
+            # 메인 명령어에 따라 분기
+            if main_cmd == "repo":
+                await self._handle_repo_cmd(message, args)
+            elif main_cmd == "log":
+                await self._handle_log_cmd(message, args)
+            elif main_cmd == "system":
+                await self._handle_system_cmd(message, args)
+            elif main_cmd == "git":
+                await self._handle_git_cmd(message, args)
+            elif main_cmd == "container":
+                await self._handle_container_cmd(message, args)
+            elif main_cmd == "help":
+                await self._handle_help_cmd(message, args)
+            else:
+                await message.channel.send(f"Unknown command: {main_cmd}")
+
+    async def run_discord_bot(self, token):
+        """
+        실제 디스코드 봇을 실행하는 메서드
+        """
+        await self.client.start(token)
+
+    async def _poll_log_queue(self):
+        """
+        에러 로그 큐에서 메시지를 꺼내, 특정 채널로 전송.
+        channel_id는 원하는 채널로 설정.
+        """
+        channel_id = 123456789012345678
+        channel = None
+        while not self.client.is_closed():
+            try:
+                if channel is None:
+                    channel = self.client.get_channel(channel_id)
+                
+                while not self.log_handler.get_queue().empty():
+                    msg = self.log_handler.get_queue().get()
+                    if channel:
+                        await channel.send(f"[LogError] {msg}")
+            except Exception as e:
+                logger.error(f"Error in _poll_log_queue: {e}")
+            await asyncio.sleep(1)
+
+    # -------------------------------------------------------------------------
+    # 1) $repo 명령 처리
+    # -------------------------------------------------------------------------
+    async def _handle_repo_cmd(self, message, args):
+        """
+        예:
+          $repo list
+          $repo --name "repo_name" restart
+          $repo --name "repo_name" start --arg "-some_args"
+          $repo --name "repo_name" stop
+          $repo --name "repo_name" kill
+        """
+        if not args:
+            await message.channel.send("Usage: $repo [list|--name REPO (start|stop|restart|kill) ...]")
+            return
+
+        if args[0] == "list":
+            # 레포 목록 반환
+            repo_list = self.scriptService.get_repo_list()
+            await message.channel.send(f"Repo list: {repo_list}")
+            return
+
+        # 그 외 --name 옵션 처리
+        # ex) ['--name', 'repo_name', 'restart']
+        repo_name = None
+        action = None
+        extra_arg = None
+
+        i = 0
+        while i < len(args):
+            if args[i] == "--name":
+                i += 1
+                if i < len(args):
+                    repo_name = args[i]
+            elif args[i] in ["start", "stop", "restart", "kill"]:
+                action = args[i]
+            elif args[i] == "--arg":
+                i += 1
+                if i < len(args):
+                    extra_arg = args[i]
+            i += 1
+
+        if not repo_name and action != "list":
+            await message.channel.send("Need to specify --name for this action.")
+            return
+
+        if action == "start":
+            self.scriptService.start_repo(repo_name, extra_arg)
+            await message.channel.send(f"Started repo '{repo_name}' with arg {extra_arg}")
+        elif action == "stop":
+            self.scriptService.stop_repo(repo_name)
+            await message.channel.send(f"Stopped repo '{repo_name}'.")
+        elif action == "restart":
+            self.scriptService.restart_repo(repo_name)
+            await message.channel.send(f"Restarted repo '{repo_name}'.")
+        elif action == "kill":
+            self.scriptService.kill_repo(repo_name)
+            await message.channel.send(f"Killed repo '{repo_name}'.")
+        else:
+            await message.channel.send("Unknown action. Try start/stop/restart/kill.")
+
+    # -------------------------------------------------------------------------
+    # 2) $log 명령 처리
+    # -------------------------------------------------------------------------
+    async def _handle_log_cmd(self, message, args):
+        """
+        예:
+          $log --all
+          $log --today
+          $log --list
+          $log --repo "repo_name" --debug
+        """
+        if not args:
+            await message.channel.send("Usage: $log --options (--all, --today, --repo, --debug, etc.)")
+            return
+
+        opts = set(args)
+        if "--all" in opts:
+            logs = self.scriptService.get_all_logs()
+            await message.channel.send(f"All logs: {logs}")
+        elif "--today" in opts:
+            logs = self.scriptService.get_today_logs()
+            await message.channel.send(f"Today logs: {logs}")
+        else:
+            await message.channel.send("No valid log option found.")
+
+    # -------------------------------------------------------------------------
+    # 3) $system 명령 처리
+    # -------------------------------------------------------------------------
+    async def _handle_system_cmd(self, message, args):
+        """
+        예:
+          $system restart --alert
+          $system status --cpu --temp
+        """
+        if not args:
+            await message.channel.send("Usage: $system [restart|status] [--alert] [--cpu] [--temp]")
+            return
+
+        cmd = args[0]
+        flags = args[1:]
+
+        if cmd == "restart":
+            if "--alert" in flags:
+                self.scriptService.restart_system(alert=True)
+                await message.channel.send("System restarting... Alert mode on.")
+            else:
+                self.scriptService.restart_system(alert=False)
+                await message.channel.send("System restarting...")
+
+        elif cmd == "status":
+            cpu_info = None
+            temp_info = None
+
+            if "--cpu" in flags:
+                cpu_info = self.scriptService.get_cpu_usage()
+            if "--temp" in flags:
+                temp_info = self.scriptService.get_temp()
+
+            msg = "System status:"
+            if cpu_info is not None:
+                msg += f"\n - CPU: {cpu_info}"
+            if temp_info is not None:
+                msg += f"\n - Temp: {temp_info}"
+            await message.channel.send(msg)
+        else:
+            await message.channel.send(f"Unknown system command: {cmd}")
+
+    # -------------------------------------------------------------------------
+    # 4) $git 명령 처리
+    # -------------------------------------------------------------------------
+    async def _handle_git_cmd(self, message, args):
+        """
+        예:
+          $git fetch --all --repo "this_repo"
+        """
+        if not args:
+            await message.channel.send("Usage: $git fetch [--all] [--repo REPO_NAME]")
+            return
+
+        sub_cmd = args[0]  # e.g. "fetch"
+        flags = args[1:]
+
+        if sub_cmd == "fetch":
+            if "--all" in flags:
+                self.scriptService.git_fetch_all()
+                await message.channel.send("Fetched all repos.")
+            else:
+                repo_name = None
+                for i, f in enumerate(flags):
+                    if f == "--repo" and i + 1 < len(flags):
+                        repo_name = flags[i + 1]
+                if repo_name:
+                    self.scriptService.git_fetch_repo(repo_name)
+                    await message.channel.send(f"Fetched repo {repo_name}.")
+                else:
+                    await message.channel.send("No repo specified.")
+        else:
+            await message.channel.send(f"Unknown git command: {sub_cmd}")
+
+    # -------------------------------------------------------------------------
+    # 5) $container 명령 처리
+    # -------------------------------------------------------------------------
+    async def _handle_container_cmd(self, message, args):
+        """
+        예:
+          $container --list
+          $container --name "container_name" --start
+        """
+        if not args:
+            await message.channel.send("Usage: $container --list | --name NAME [--start|--stop|--restart]")
+            return
+
+        if "--list" in args:
+            containers = self.scriptService.list_containers()
+            await message.channel.send(f"Container list: {containers}")
+            return
+
+        cont_name = None
+        action = None
+        i = 0
+        while i < len(args):
+            if args[i] == "--name":
+                i += 1
+                if i < len(args):
+                    cont_name = args[i]
+            elif args[i] in ["--start", "--stop", "--restart"]:
+                action = args[i][2:]  # '--start' -> 'start'
+            i += 1
+
+        if not cont_name:
+            await message.channel.send("Please specify --name <container_name>.")
+            return
+
+        if action == "start":
+            self.scriptService.container_start(cont_name)
+            await message.channel.send(f"Container '{cont_name}' started.")
+        elif action == "stop":
+            self.scriptService.container_stop(cont_name)
+            await message.channel.send(f"Container '{cont_name}' stopped.")
+        elif action == "restart":
+            self.scriptService.container_restart(cont_name)
+            await message.channel.send(f"Container '{cont_name}' restarted.")
+        else:
+            await message.channel.send("Unknown container action. Use --start|--stop|--restart")
+
+    # -------------------------------------------------------------------------
+    # 6) $help 명령 처리
+    # -------------------------------------------------------------------------
+    async def _handle_help_cmd(self, message, args):
+        help_msg = (
+            "**Command list**\n"
+            "$repo list\n"
+            "$repo --name \"repo_name\" [start|stop|restart|kill] [--arg \"args\"]\n"
+            "$log --all | --today | --repo \"repo_name\" | --debug ...\n"
+            "$system restart [--alert]\n"
+            "$system status [--cpu] [--temp]\n"
+            "$git fetch --all | --repo \"repo_name\"\n"
+            "$container --list | --name \"container_name\" --start\n"
+            "$help (this message)\n"
+        )
+        await message.channel.send(help_msg)
+
+./src/cli/__init__.py
+
+./src/serv/container_service.py
+import subprocess
+
+class ContainerService:
+    def list_containers(self):
+        """
+        docker ps -a 명령을 실행하여 컨테이너 목록(이름)을 반환
+        --format "{{.Names}}" 옵션을 주어, 컨테이너 이름만 리스트로 받는다.
+        """
+        output = subprocess.check_output(["docker", "ps", "-a", "--format", "{{.Names}}"])
+        lines = output.decode("utf-8").strip().splitlines()
+        return lines
+
+    def start_container(self, cont_name):
+        """
+        docker start <container_name> 실행
+        """
+        containers = self.list_containers()
+        if cont_name not in containers:
+            raise ValueError(f"Container '{cont_name}' does not exist.")
+        
+        subprocess.run(["docker", "start", cont_name], check=True)
+        return f"Container '{cont_name}' started."
+
+    def stop_container(self, cont_name):
+        """
+        docker stop <container_name> 실행
+        """
+        containers = self.list_containers()
+        if cont_name not in containers:
+            raise ValueError(f"Container '{cont_name}' does not exist.")
+
+        subprocess.run(["docker", "stop", cont_name], check=True)
+        return f"Container '{cont_name}' stopped."
+
+    def restart_container(self, cont_name):
+        """
+        docker restart <container_name> 실행
+        """
+        self.stop_container(cont_name)
+        self.start_container(cont_name)
+        return f"Container '{cont_name}' restarted."
+
+./src/serv/__init__.py
+
+./src/serv/script_service.py
+# src/application/script_service.py
+import logging
+import subprocess
+import os
+from src.domain.entities import Repository
+from src.infra.process_manager import ProcessManager
+from src.serv.container_service import ContainerService
+
+logger = logging.getLogger(__name__)
+
+class ScriptService:
+    """
+    DiscordBot(Presentation)에서 전달받은 명령을 처리하는 Service 계층.
+    Domain의 엔티티(Repository 등)와 Infrastructure(예: ProcessManager)를 사용.
+    """
+    def __init__(self, exec_repo_path="executive-repository"):
+        self.pm = ProcessManager(exec_repo_path=exec_repo_path)
+        self.containerService = ContainerService()
+        self.exec_repo_path = exec_repo_path
+        self.repos = self._load_local_repos()
+
+    def _load_local_repos(self):
+        if not os.path.isdir(self.exec_repo_path):
+            logger.warning(f"{self.exec_repo_path} does not exist or is not a directory.")
+            return {}
+
+        repo_dict = {}
+        for entry in os.listdir(self.exec_repo_path):
+            path = os.path.join(self.exec_repo_path, entry)
+            if os.path.isdir(path):
+                repo_dict[entry] = Repository(entry)
+        logger.info(f"Found local repos: {list(repo_dict.keys())}")
+        return repo_dict
+
+    def get_repo_list(self):
+        return list(self.repos.keys())
+
+    def _get_repo(self, repo_name):
+        if repo_name not in self.repos:
+            logger.error(f"Repo '{repo_name}' does not exist in {self.exec_repo_path}.")
+            raise ValueError(f"Repo '{repo_name}' not found at {self.exec_repo_path}.")
+        return self.repos[repo_name]
+
+    def start_repo(self, repo_name, extra_arg=None):
+        repo = self._get_repo(repo_name)
+        repo.start()
+        self.pm.start_repo_process(repo.name, extra_arg)
+
+    def stop_repo(self, repo_name):
+        repo = self._get_repo(repo_name)
+        repo.stop()
+        self.pm.stop_repo_process(repo.name)
+
+    def restart_repo(self, repo_name):
+        self.stop_repo(repo_name)
+        self.start_repo(repo_name)
+
+    def kill_repo(self, repo_name):
+        logger.info(f"Killing repo {repo_name} forcibly")
+
+    def status_repo(self, repo_name):
+        repo = self._get_repo(repo_name)
+        return repo.get_status()
+
+    def get_all_logs(self):
+        logger.info("get_all_logs called - not implemented")
+        return "some logs"
+
+    def get_today_logs(self):
+        logger.info("get_today_logs called - not implemented")
+        return "today's logs"
+
+    def restart_system(self, alert=False):
+        logger.info(f"restart_system called with alert={alert}")
+
+    def get_cpu_usage(self):
+        return "CPU usage"
+
+    def get_temp(self):
+        return "Temperature"
+
+    def git_fetch_all(self):
+        repos = self.get_repo_list()
+        if not repos:
+            logger.warning("No local repos found in exec_repo_path.")
+            return "No local repos found."
+
+        logger.info(f"Found local repos: {repos}. Now fetching origin.")
+        for repo_name in repos:
+            self.git_fetch_repo(repo_name)
+        return "Fetched all local repos successfully."
+
+    def git_fetch_repo(self, repo_name):
+        self._get_repo(repo_name)
+        repo_path = os.path.join(self.exec_repo_path, repo_name)
+        if not os.path.isdir(repo_path):
+            raise ValueError(f"Folder '{repo_path}' does not exist.")
+
+        cmd = ["git", "fetch", "origin"]
+        logger.info(f"Fetching repo '{repo_name}': {cmd} (cwd={repo_path})")
+        result = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True)
+        if result.returncode != 0:
+            error_msg = f"git fetch failed for {repo_name}: {result.stderr}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+
+        msg = f"Fetched repo '{repo_name}' successfully."
+        logger.info(msg)
+        return msg
+
+    def git_clone(self, url):
+        logger.info(f"Cloning from {url} into {self.exec_repo_path}")
+        result = subprocess.run(["git", "clone", url],
+                                cwd=self.exec_repo_path,
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            error_msg = f"git clone failed for {url}: {result.stderr}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+
+        return f"Cloned repo from {url}."
+
+    def list_containers(self):
+        return self.containerService.list_containers()
+
+    def container_start(self, cont_name):
+        return self.containerService.start_container(cont_name)
+
+    def container_stop(self, cont_name):
+        return self.containerService.stop_container(cont_name)
+
+    def container_restart(self, cont_name):
+        self.containerService.stop_container(cont_name)
+        self.containerService.start_container(cont_name)
+
+./src/domain/__init__.py
+
+./src/domain/entities.py
+# src/domain/entities.py
+
+class Repository:
+    def __init__(self, name, state="stopped"):
+        self.name = name
+        self.state = state  # "stopped", "running", etc.
+
+    def start(self):
+        if self.state == "running":
+            raise ValueError(f"Repo '{self.name}' is already running.")
+        self.state = "running"
+
+    def stop(self):
+        if self.state == "stopped":
+            raise ValueError(f"Repo '{self.name}' is already stopped.")
+        self.state = "stopped"
+
+    def get_status(self):
+        return self.state
+
